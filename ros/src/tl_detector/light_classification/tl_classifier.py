@@ -35,7 +35,7 @@ class TLClassifier(object):
         model.add(Dense(50))
         model.add(Dense(10))
         model.add(Dense(6, activation='softmax', name=LOGITS))
-        model.load_weights('/home/workspace/SDC_Capstone/ros/src/tl_detector/light_classification/weights.h5')
+        model.load_weights('./light_classification/weights.h5')
         self.model = model
 
 
