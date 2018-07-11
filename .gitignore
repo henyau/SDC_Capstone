@@ -1,2 +1,2 @@
-ros/build/
-ros/devel/
+/ros/devel
+/ros/build
