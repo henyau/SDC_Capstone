@@ -1,2 +1,7 @@
+*.py[cod]
+
+build
+devel
+
 /ros/devel
 /ros/build
