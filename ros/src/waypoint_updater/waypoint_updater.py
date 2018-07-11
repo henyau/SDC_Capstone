@@ -52,7 +52,7 @@ class WaypointUpdater(object):
         self.loop()
         #self.spin()
     def loop(self):
-        rate = rospy.Rate(50)
+        rate = rospy.Rate(10)
         while not rospy.is_shutdown():
             if self.pose and self.base_waypoints:
                 #find closest waypoint
@@ -89,21 +89,20 @@ class WaypointUpdater(object):
         lane.header = self.base_waypoints.header
         far_ind = closest_ind + LOOKAHEAD_WPS
         lane.waypoints = self.base_waypoints.waypoints[closest_ind:far_ind]
-        if self.stopline_wp_ind != -1 and self.stopline_wp_ind <= far_ind:
+        if self.stopline_wp_ind != -1 and self.stopline_wp_ind < far_ind:
         # need to slow down
            
             temp = [] 
             for i, wp in enumerate(lane.waypoints):
                 p = Waypoint()
                 p.pose = wp.pose
-
                 stop_ind = max(self.stopline_wp_ind- closest_ind - 2, 0)
                 dist = self.distance(lane.waypoints, i, stop_ind)
                 vel = math.sqrt(2*MAX_DECEL*dist)
                 if vel < 1.0:
                     vel = 0.0
                 #set velocity
-                vel = 0
+                #vel = 0
                 p.twist.twist.linear.x = min(vel, wp.twist.twist.linear.x)
                 temp.append(p)
             lane.waypoints = temp
@@ -119,15 +118,15 @@ class WaypointUpdater(object):
         '''Stores the /base_waypoints in KDTree, should only occur once'''
         #hy 6/29
         self.base_waypoints = waypoints
-        #if not self.waypoints_2d: # callback is only called once,
-        self.waypoints_2d = [[waypoint.pose.pose.position.x, waypoint.pose.pose.position.y] for waypoint in waypoints.waypoints]
-        self.waypoint_tree = KDTree(self.waypoints_2d)
+        if not self.waypoints_2d: # callback is only called once,
+            self.waypoints_2d = [[waypoint.pose.pose.position.x, waypoint.pose.pose.position.y] for waypoint in waypoints.waypoints]
+            self.waypoint_tree = KDTree(self.waypoints_2d)
         
 
     def traffic_cb(self, msg):
         #Callback for /traffic_waypoint message
         # -1 if no 
-       self.stopline_wp_ind = msg
+        self.stopline_wp_ind = msg.data
 
     def obstacle_cb(self, msg):
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
