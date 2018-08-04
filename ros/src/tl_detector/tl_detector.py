@@ -2,13 +2,14 @@
 
 #hy, rd 09/07/2018
 #lb 12/07/2018
+#rd 03/08/2018
 
 import rospy
 from std_msgs.msg import Int32
 from geometry_msgs.msg import PoseStamped, Pose
 from styx_msgs.msg import TrafficLightArray, TrafficLight
 from styx_msgs.msg import Lane
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image as ImageMsg
 from cv_bridge import CvBridge
 from light_classification.tl_classifier import TLClassifier
 import tf
@@ -18,7 +19,14 @@ import numpy as np
 
 from scipy.spatial import KDTree
 
-STATE_COUNT_THRESHOLD = 3
+import tensorflow as tensorf
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageColor
+#import scipy.misc
+#from scipy.stats import norm
+
+STATE_COUNT_THRESHOLD = 1
 
 class TLDetector(object):
     def __init__(self):
@@ -42,7 +50,7 @@ class TLDetector(object):
         necessary to rely on the position of the light and the camera image to predict it.
         '''
         sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
-        sub6 = rospy.Subscriber('/image_color', Image, self.image_cb)
+        sub6 = rospy.Subscriber('/image_color', ImageMsg, self.image_cb)
         
         config_string = rospy.get_param("/traffic_light_config")
         self.config = yaml.load(config_string)
@@ -59,6 +67,32 @@ class TLDetector(object):
         self.state_count = 0
         
         self.image_cnt = 0
+        
+        # Colors (one for each class)
+        self.cmap = ImageColor.colormap
+        print("Number of colors =", len(self.cmap))
+        self.COLOR_LIST = sorted([c for c in self.cmap.keys()])
+        
+        self.SSD_GRAPH_FILE = 'ssd_mobilenet_v1_coco_2018_01_28_113/frozen_inference_graph.pb'
+        
+        self.detection_graph = self.load_graph(self.SSD_GRAPH_FILE)
+
+        # The input placeholder for the image.
+        # `get_tensor_by_name` returns the Tensor with the associated name in the Graph.
+        self.image_tensor = self.detection_graph.get_tensor_by_name('image_tensor:0')
+
+        # Each box represents a part of the image where a particular object was detected.
+        self.detection_boxes = self.detection_graph.get_tensor_by_name('detection_boxes:0')
+
+        # Each score represent how level of confidence for each of the objects.
+        # Score is shown on the result image, together with the class label.
+        self.detection_scores = self.detection_graph.get_tensor_by_name('detection_scores:0')
+
+        # The classification of the object (integer id).
+        self.detection_classes = self.detection_graph.get_tensor_by_name('detection_classes:0')
+        
+        self.cnt_img = 0
+        
         rospy.spin()
 
     def pose_cb(self, msg):
@@ -81,12 +115,19 @@ class TLDetector(object):
             msg (Image): image from car-mounted camera
 
         """
-        self.image_cnt += 1
 
         self.has_image = True
         self.camera_image = msg
-        light_wp, state = self.process_traffic_lights()
-
+        
+        if self.image_cnt == 7:
+            light_wp, state = self.process_traffic_lights()
+            self.image_cnt = 0
+        else:
+            light_wp = self.last_wp
+            state = self.state
+        
+        self.image_cnt += 1
+        
         '''
         Publish upcoming red lights at camera frequency.
         Each predicted state has to occur `STATE_COUNT_THRESHOLD` number
@@ -146,11 +187,63 @@ class TLDetector(object):
             int: ID of traffic light color (specified in styx_msgs/TrafficLight)
 
         """
-        #for now just test with known light state
+        #ret = self.detection()
+        #return ret
         #return light.state
-        #uncomment below when classifier works
+ 
+        # Load a sample image.
+        #image = Image.open('./assets/hamburg5.png')
+        image = self.bridge.imgmsg_to_cv2(self.camera_image, "rgb8")
+        image_np = np.expand_dims(np.asarray(image, dtype=np.uint8), 0)
 
-        return light.state
+        with tensorf.Session(graph=self.detection_graph) as sess:                
+        # Actual detection.
+            (boxes, scores, classes) = sess.run([self.detection_boxes, self.detection_scores, self.detection_classes], 
+                                                feed_dict={self.image_tensor: image_np})
+        sess.close()
+
+        # Remove unnecessary dimensions
+        boxes = np.squeeze(boxes)
+        scores = np.squeeze(scores)
+        classes = np.squeeze(classes)
+
+        confidence_cutoff = 0.3
+        # Filter boxes with a confidence score less than `confidence_cutoff`
+        boxes, scores, classes = self.filter_boxes(confidence_cutoff, boxes, scores, classes)
+
+        # The current box coordinates are normalized to a range between 0 and 1.
+        # This converts the coordinates actual location on the image.
+           
+        (height, width, channels) = image.shape
+        box_coords = self.to_image_coords(boxes, height, width)
+            
+        var = 0
+        for i in range(len(classes)):
+            if classes[i] == 10.:
+                self.cnt_img = self.cnt_img + 1
+                #im = Image.fromarray(image, 'RGB')
+                #self.draw_boxes(im, box_coords, classes)
+                #scipy.misc.toimage(im).save('outfile'+str(self.cnt_img)+'.jpg')
+                img = Image.fromarray(image, 'RGB')
+                cropped_img = img.crop(np.array([box_coords[i, 1], box_coords[i, 0], box_coords[i, 3], box_coords[i, 2]]).astype(int))
+                #np.set_printoptions(threshold='nan')
+                #print(np.array(cropped_img))
+                #scipy.misc.toimage(cropped_img).save('cropped'+str(self.cnt_img)+'.jpg')
+                boundary = ([200, 0, 0], [255, 75, 75])
+                lower = np.array(boundary[0], dtype = "uint8")
+                upper = np.array(boundary[1], dtype = "uint8")
+                mask = cv2.inRange(np.array(cropped_img), lower, upper)
+                if 255 in mask:
+                    retValue = TrafficLight.RED
+                else:
+                    retValue = -1 
+                var = 1
+                break
+                    
+        if var == 0:
+            retValue = -1
+        
+        return retValue
         """
         if not self.has_image:
             self.prev_light_loc = None
@@ -190,11 +283,64 @@ class TLDetector(object):
                 diff = dist_ind
                 closest_light = light
                 line_wp_ind = temp_wp_ind
-        if closest_light:
+        if closest_light and diff<120:
             state = self.get_light_state(closest_light)
             return line_wp_ind, state
 
         return -1, TrafficLight.UNKNOWN
+
+    #
+    # Utility funcs
+    #
+
+    def filter_boxes(self, min_score, boxes, scores, classes):
+        """Return boxes with a confidence >= `min_score`"""
+        n = len(classes)
+        idxs = []
+        for i in range(n):
+            if scores[i] >= min_score:
+                idxs.append(i)
+    
+        filtered_boxes = boxes[idxs, ...]
+        filtered_scores = scores[idxs, ...]
+        filtered_classes = classes[idxs, ...]
+        return filtered_boxes, filtered_scores, filtered_classes
+
+    def to_image_coords(self, boxes, height, width):
+        """
+        The original box coordinate output is normalized, i.e [0, 1].
+    
+        This converts it back to the original coordinate based on the image
+        size.
+        """
+        box_coords = np.zeros_like(boxes)
+     
+        box_coords[:, 0] = boxes[:, 0] * height
+        box_coords[:, 1] = boxes[:, 1] * width
+        box_coords[:, 2] = boxes[:, 2] * height
+        box_coords[:, 3] = boxes[:, 3] * width
+    
+        return box_coords
+
+    def draw_boxes(self, image, boxes, classes, thickness=4):
+        """Draw bounding boxes on the image"""
+        draw = ImageDraw.Draw(image)
+        for i in range(len(boxes)):
+            bot, left, top, right = boxes[i, ...]
+            class_id = int(classes[i])
+            color = self.COLOR_LIST[class_id]
+            draw.line([(left, top), (left, bot), (right, bot), (right, top), (left, top)], width=thickness, fill=color)
+        
+    def load_graph(self, graph_file):
+        """Loads a frozen inference graph"""
+        graph = tensorf.Graph()
+        with graph.as_default():
+            od_graph_def = tensorf.GraphDef()
+            with tensorf.gfile.GFile(graph_file, 'rb') as fid:
+                serialized_graph = fid.read()
+                od_graph_def.ParseFromString(serialized_graph)
+                tensorf.import_graph_def(od_graph_def, name='')
+        return graph
 
 if __name__ == '__main__':
     try:
