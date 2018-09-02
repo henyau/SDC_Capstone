@@ -76,7 +76,8 @@ class TLDetector(object):
         self.SSD_GRAPH_FILE = 'ssd_mobilenet_v1_coco_2018_01_28_113/frozen_inference_graph.pb'
         
         self.detection_graph = self.load_graph(self.SSD_GRAPH_FILE)
-
+        print("Loaded graph")
+        
         # The input placeholder for the image.
         # `get_tensor_by_name` returns the Tensor with the associated name in the Graph.
         self.image_tensor = self.detection_graph.get_tensor_by_name('image_tensor:0')
