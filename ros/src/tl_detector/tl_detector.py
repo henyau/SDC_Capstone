@@ -120,7 +120,7 @@ class TLDetector(object):
         self.has_image = True
         self.camera_image = msg
         
-        if self.image_cnt == 7:
+        if self.image_cnt == 2:
             light_wp, state = self.process_traffic_lights()
             self.image_cnt = 0
         else:
